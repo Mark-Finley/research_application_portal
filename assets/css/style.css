@@ -1,0 +1,12 @@
+body {
+  font-family: 'Segoe UI', sans-serif;
+  background-color: #f4f4f4;
+}
+
+nav {
+  min-width: 250px;
+}
+
+.nav-link:hover {
+  text-decoration: underline;
+}

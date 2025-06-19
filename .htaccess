@@ -1,0 +1,10 @@
+RewriteEngine On
+RewriteBase /research_portal_frontend/
+
+RewriteRule ^login$ /login.php [L]
+RewriteRule ^register$ /register.php [L]
+RewriteRule ^dashboard$ /dashboard.php [L]
+RewriteRule ^apply$ /application.php [L]
+RewriteRule ^admin$ admin/dashboard.php [L]
+
+DirectoryIndex index.php
