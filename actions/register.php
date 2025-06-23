@@ -19,7 +19,7 @@ if (empty($full_name) || empty($email) || empty($password) || empty($confirm_pas
 
 // 2. Email must be institutional
 if (!str_ends_with($email, '@kath.gov.gh')) {
-    die("Only institutional emails (@kath.gov.gh) are allowed.");
+    die("Only institutional emails are allowed. Try using your official institutional email.");
 }
 
 // 3. Passwords must match

@@ -178,7 +178,7 @@ $recentApplications = $recentStmt->fetchAll(PDO::FETCH_ASSOC);
                   </td>
                   <td>
                     <?php if ($app['status'] !== 'approved' && $app['status'] !== 'rejected'): ?>
-                      <a href="application.php?id=<?= $app['id'] ?>" class="btn btn-sm btn-outline-primary">Continue</a>
+                      <a href="apply.php?id=<?= $app['id'] ?>" class="btn btn-sm btn-outline-primary">Continue</a>
                     <?php else: ?>
                       <span class="text-muted">—</span>
                     <?php endif; ?>

@@ -1,1 +1,4 @@
 /uploads
+/actions/callback_debug.txt
+payment_log.txt
+.env
