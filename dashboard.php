@@ -3,8 +3,8 @@ include 'config.php';
 include 'includes/header.php';
 
 if (!isset($_SESSION['user_id'])) {
-    header("Location: login.php");
-    exit;
+  header("Location: login.php");
+  exit;
 }
 
 $user_id = $_SESSION['user_id'];
@@ -41,38 +41,54 @@ $recentApplications = $recentStmt->fetchAll(PDO::FETCH_ASSOC);
     font-size: 2.2rem;
     font-weight: 600;
   }
-  .table td, .table th {
+
+  .table td,
+  .table th {
     vertical-align: middle;
   }
+
   .call_to_action {
-    font-size: 1.5rem;
+    font-size: 22px;
     font-weight: 500;
-    padding: 1rem 1rem;
+    padding: 0.5rem 0.5rem;
     border-radius: 0.375rem;
     background-color: #397b56;
   }
+
   .call_to_action:hover {
     background-color: #2f5e43;
   }
-  .das{
-    display: flex;
+
+ .dashboard-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+@media (max-width: 576px) {
+  .dashboard-header {
     flex-direction: column;
-    flex-wrap: nowrap;
+    align-items: flex-start;
   }
-  
+
+  .dashboard-header h2,
+  .dashboard-header .btn {
+    width: 100%;
+  }
+}
+
 </style>
 
 <div class="container py-4">
-  <div class="d-flex justify-content-between align-items-center mb-4">
-    <div class="das">
-      <h2 class="">Dashboard</h2>
-    </div>
-    <div class="flex flex-col gap-2 sm:flex-row">
-      <a href="payment.php" class="btn btn-primary d-flex align-items-center call_to_action">
-        <i class="fas fa-plus-circle me-2"></i> Begin New Application
-      </a>
-    </div>
+  <div class="dashboard-header mb-4">
+    <h2>Dashboard</h2>
+    <a href="payment.php" class="btn btn-primary d-flex align-items-center call_to_action">
+      <i class="fas fa-plus-circle me-2"></i> Begin New Application
+    </a>
   </div>
+
 
   <!-- DASHBOARD STATS -->
   <div class="row g-3 mb-4">
@@ -150,13 +166,13 @@ $recentApplications = $recentStmt->fetchAll(PDO::FETCH_ASSOC);
                   <td><?= date('Y-m-d', strtotime($app['submitted_at'])) ?></td>
                   <td>
                     <?php
-                      $statusClass = match($app['status']) {
-                        'approved' => 'bg-success',
-                        'pending' => 'bg-warning text-dark',
-                        'under_review' => 'bg-info text-dark',
-                        'rejected' => 'bg-danger',
-                        default => 'bg-secondary'
-                      };
+                    $statusClass = match ($app['status']) {
+                      'approved' => 'bg-success',
+                      'pending' => 'bg-warning text-dark',
+                      'under_review' => 'bg-info text-dark',
+                      'rejected' => 'bg-danger',
+                      default => 'bg-secondary'
+                    };
                     ?>
                     <span class="badge <?= $statusClass ?>"><?= ucfirst($app['status']) ?></span>
                   </td>

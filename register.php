@@ -36,7 +36,7 @@
             flex: 1;
             background: #f9fafc;
             padding: 40px 30px;
-            text-align: left;
+            text-align: center;
         }
 
         .logo {

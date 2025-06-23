@@ -1,0 +1,1 @@
+2025-06-23 09:33:19 - {"status":true,"message":"Authorization URL created","data":{"authorization_url":"https://checkout.paystack.com/izwn8vi1bazgihk","access_code":"izwn8vi1bazgihk","reference":"txn_68591f5f1a391"}}
