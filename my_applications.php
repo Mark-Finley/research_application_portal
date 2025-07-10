@@ -1,5 +1,7 @@
 <?php
 require 'includes/header.php';
+require 'config.php';
+require 'form_steps/form_config.php';
 
 if (!isset($_SESSION['user_id'])) {
     header("Location: login.php");
@@ -7,7 +9,7 @@ if (!isset($_SESSION['user_id'])) {
 }
 
 // Fetch applications for the logged-in user
-$stmt = $pdo->prepare("SELECT id, study_title, research_category, submitted_at, status 
+$stmt = $pdo->prepare("SELECT id, study_title, research_category, submitted_at, status, ref_code, step_completed 
                        FROM applications WHERE user_id = ? ORDER BY submitted_at DESC");
 $stmt->execute([$_SESSION['user_id']]);
 $applications = $stmt->fetchAll(PDO::FETCH_ASSOC);
@@ -23,6 +25,7 @@ $applications = $stmt->fetchAll(PDO::FETCH_ASSOC);
                     <th>#</th>
                     <th>Study Title</th>
                     <th>Category</th>
+                    <th>Reference</th>
                     <th>Date Submitted</th>
                     <th>Status</th>
                     <th>Action</th>
@@ -33,19 +36,44 @@ $applications = $stmt->fetchAll(PDO::FETCH_ASSOC);
                     <?php foreach ($applications as $index => $app): ?>
                         <tr>
                             <td><?= $index + 1 ?></td>
-                            <td><?= htmlspecialchars($app['study_title']) ?></td>
-                            <td><?= ucfirst($app['research_category']) ?></td>
+                            <td><?= htmlspecialchars($app['study_title'] ?? 'Untitled') ?></td>
+                            <td><?= ucfirst($app['research_category'] ?? 'N/A') ?></td>
+                            <td><?= htmlspecialchars($app['ref_code'] ?? 'N/A') ?></td>
                             <td><?= date('Y-m-d', strtotime($app['submitted_at'])) ?></td>
                             <td>
-                                <?php if ($app['status']): ?>
-                                    <span class="badge bg-success">Complete</span>
-                                <?php else: ?>
-                                    <span class="badge bg-warning text-dark">Incomplete</span>
-                                <?php endif; ?>
+                                <?php
+                                $statusClass = match ($app['status']) {
+                                    'approved' => 'bg-success',
+                                    'pending' => 'bg-warning text-dark',
+                                    'under_review' => 'bg-info text-dark',
+                                    'rejected' => 'bg-danger',
+                                    'submitted' => 'bg-warning text-dark', // Keep for backward compatibility
+                                    'incomplete' => 'bg-secondary',
+                                    default => 'bg-secondary'
+                                };
+                                
+                                // Set a default status text for empty or null values
+                                $statusText = !empty($app['status']) ? ucfirst($app['status']) : 'Incomplete';
+                                ?>
+                                <span class="badge <?= $statusClass ?>"><?= $statusText ?></span>
                             </td>
                             <td>
-                                <?php if (!$app['status']): ?>
-                                    <a href="continue_application.php?id=<?= $app['id'] ?>" class="btn btn-sm btn-primary">Continue</a>
+                                <?php if ($app['status'] !== 'approved' && $app['status'] !== 'rejected'): ?>
+                                    <?php 
+                                        // Determine next step for the application
+                                        $nextStep = isset($app['step_completed']) ? (int)$app['step_completed'] + 1 : 1;
+                                        // If step_completed is 7 (final step) or greater, go to step 7 (review)
+                                        $nextStep = $nextStep > 7 ? 7 : $nextStep;
+                                        
+                                        // Don't allow editing if the application is already pending or under review
+                                        $isEditable = !in_array($app['status'], ['pending', 'under_review', 'submitted']);
+                                    ?>
+                                    
+                                    <?php if ($isEditable): ?>
+                                        <a href="application.php?step=<?= $nextStep ?>&app_id=<?= $app['id'] ?>" class="btn btn-sm btn-primary">Continue</a>
+                                    <?php else: ?>
+                                        <span class="badge bg-secondary">Awaiting Review</span>
+                                    <?php endif; ?>
                                 <?php else: ?>
                                     <button class="btn btn-sm btn-secondary" disabled>View</button>
                                 <?php endif; ?>
@@ -53,7 +81,7 @@ $applications = $stmt->fetchAll(PDO::FETCH_ASSOC);
                         </tr>
                     <?php endforeach; ?>
                 <?php else: ?>
-                    <tr><td colspan="6" class="text-center">No applications found.</td></tr>
+                    <tr><td colspan="7" class="text-center">No applications found.</td></tr>
                 <?php endif; ?>
             </tbody>
         </table>

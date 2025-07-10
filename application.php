@@ -1,768 +1,478 @@
 <?php
+/**
+ * Research Application Form
+ * Modular multi-step application form with save and resume functionality
+ */
 include 'includes/header.php';
 require 'config.php';
-$prefill = $_SESSION['form_data'] ?? [];
+require 'form_steps/form_config.php';
+require 'form_steps/form_utils.php';
 
 // Ensure user has paid
 $stmt = $pdo->prepare("SELECT * FROM users WHERE id = ?");
-$stmt->execute([$_SESSION['user_id']]);
+$stmt->execute([$_SESSION['user_id'] ?? 0]);
 $user = $stmt->fetch(PDO::FETCH_ASSOC);
-if (!$user || $user['has_paid'] != 1) {
+
+if (!isset($_SESSION['user_id']) || !$user) {
+    header("Location: login.php");
+    exit();
+}
+
+if ($user['has_paid'] != 1) {
     header("Location: payment.php");
     exit();
 }
+
+// Get current step from URL or default to 1
+$current_step = isset($_GET['step']) ? (int)$_GET['step'] : 1;
+
+// Validate step number
+if ($current_step < 1 || $current_step > count($form_steps)) {
+    $current_step = 1;
+}
+
+// Check if we are loading a specific application
+$specific_app_id = isset($_GET['app_id']) ? (int)$_GET['app_id'] : null;
+
+// Get application data 
+$application = null;
+if ($specific_app_id) {
+    // Get the specific application by ID
+    $stmt = $pdo->prepare("SELECT * FROM applications WHERE id = ? AND user_id = ?");
+    $stmt->execute([$specific_app_id, $_SESSION['user_id']]);
+    $application = $stmt->fetch(PDO::FETCH_ASSOC);
+    
+    // Check if the application is in a state that shouldn't be edited (pending, under review, etc.)
+    if ($application && in_array($application['status'], ['pending', 'under_review', 'submitted'])) {
+        // Redirect to dashboard with a message that the application is awaiting review
+        header("Location: dashboard.php?message=application_in_review");
+        exit;
+    }
+    
+    // If step is not specified but application exists, set step to the next one after completed
+    if (!isset($_GET['step']) && $application && isset($application['step_completed'])) {
+        $current_step = min((int)$application['step_completed'] + 1, count($form_steps));
+    }
+} else {
+    // Get the most recent application
+    $application = getApplicationData($pdo, $_SESSION['user_id']);
+}
+
+// Get step data for the current step
+$step_data = [];
+if ($application && !empty($application['form_data'])) {
+    $form_data = json_decode($application['form_data'], true);
+    if (is_array($form_data) && isset($form_data[$current_step])) {
+        $step_data = $form_data[$current_step];
+    }
+}
+
+// Custom styles for the modular form
 ?>
-
-<!-- Internal CSS for form steps -->
 <style>
-    .form-step {
-        display: none;
-    }
+/* Progress bar styles */
+.progress-container {
+    padding: 20px 0;
+}
 
-    .form-step.active {
-        display: block;
-    }
+.step-indicator {
+    width: 30px;
+    height: 30px;
+    border-radius: 50%;
+    background-color: #e9ecef;
+    color: #6c757d;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin: 0 auto;
+    position: relative;
+    z-index: 2;
+    border: 2px solid #e9ecef;
+}
+
+.step-indicator.active {
+    background-color: #0d6efd;
+    color: white;
+    border-color: #0d6efd;
+}
+
+.step-indicator.completed {
+    background-color: #198754;
+    color: white;
+    border-color: #198754;
+}
+
+.step-title {
+    font-size: 0.8rem;
+    color: #6c757d;
+    max-width: 120px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+/* Card styles */
+.card {
+    border: none;
+    box-shadow: 0 0.125rem 0.25rem rgba(0, 0, 0, 0.075);
+    margin-bottom: 1.5rem;
+}
+
+.card-title {
+    color: #495057;
+    font-weight: 600;
+    margin-bottom: 1.25rem;
+}
+
+/* Form element styles */
+.form-control:focus, .form-select:focus, .form-check-input:focus {
+    border-color: #86b7fe;
+    box-shadow: 0 0 0 0.25rem rgba(13, 110, 253, 0.25);
+}
+
+.form-check-input:checked {
+    background-color: #0d6efd;
+    border-color: #0d6efd;
+}
+
+/* Alert when a form is saved */
+#saveAlert {
+    position: fixed;
+    top: 20px;
+    right: 20px;
+    z-index: 9999;
+    display: none;
+}
+
+/* Validation feedback */
+.invalid-feedback {
+    display: none;
+    width: 100%;
+    margin-top: 0.25rem;
+    font-size: 0.875em;
+    color: #dc3545;
+}
+
+.was-validated .form-control:invalid,
+.form-control.is-invalid {
+    border-color: #dc3545;
+    padding-right: calc(1.5em + 0.75rem);
+    background-image: url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12' width='12' height='12' fill='none' stroke='%23dc3545'%3e%3ccircle cx='6' cy='6' r='4.5'/%3e%3cpath stroke-linejoin='round' d='M5.8 3.6h.4L6 6.5z'/%3e%3ccircle cx='6' cy='8.2' r='.6' fill='%23dc3545' stroke='none'/%3e%3c/svg%3e");
+    background-repeat: no-repeat;
+    background-position: right calc(0.375em + 0.1875rem) center;
+    background-size: calc(0.75em + 0.375rem) calc(0.75em + 0.375rem);
+}
+
+.was-validated .form-control:invalid:focus,
+.form-control.is-invalid:focus {
+    border-color: #dc3545;
+    box-shadow: 0 0 0 0.25rem rgba(220, 53, 69, 0.25);
+}
+
+.was-validated .form-check-input:invalid,
+.form-check-input.is-invalid {
+    border-color: #dc3545;
+}
+
+.was-validated .form-check-input:invalid:checked,
+.form-check-input.is-invalid:checked {
+    background-color: #dc3545;
+}
 </style>
 
-
 <div class="container my-5">
-    <h2 class="text-center mb-4">Research Application</h2>
-    <form id="applicationForm" action="submit.php" method="POST" enctype="multipart/form-data">
-        <input type="hidden" name="ref_code" value="<?php echo htmlspecialchars($prefill['ref_code'] ?? ''); ?>">
-
-        <!-- Step 1 -->
-        <div class="form-step active">
-            <h4>Step 1: New Registration</h4>
-
-            <div class="mb-3">
-                <label for="purpose" class="form-label">Purpose of Study</label>
-                <select class="form-select" id="purpose" name="purpose">
-                    <option>Non-Degree</option>
-                    <option>Diploma</option>
-                    <option>1st Degree</option>
-                    <option>PHD</option>
-                    <option>Fellowship</option>
-                    <option>Membership</option>
-                    <option>2nd Degree</option>
-                </select>
-            </div>
-
-            <div class="mb-3">
-                <label class="form-label">Study Category</label><br>
-                <div class="form-check">
-                    <input class="form-check-input" type="radio" name="category" value="Sponsored by KATH">
-                    <label class="form-check-label">Sponsored by KATH / Unit Budgets</label>
-                </div><br>
-                <div class="form-check">
-                    <input class="form-check-input" type="radio" name="category"
-                        value="Sponsored by Local Ghanaian Organizations">
-                    <label class="form-check-label">Sponsored by Local Ghanaian Organizations</label>
-                </div><br>
-                <div class="form-check">
-                    <input class="form-check-input" type="radio" name="category"
-                        value="With International Funding (US$ 15,000.00 - 500,000.00)">
-                    <label class="form-check-label">With International Funding (US$ 15,000.00 - 500,000.00)</label>
-                </div><br>
-                <div class="form-check">
-                    <input class="form-check-input" type="radio" name="category"
-                        value="With International Funding (Less than US$ 15,000.00)">
-                    <label class="form-check-label">With Internatioanl Funding (Less than US$ 15,000.00)</label>
-                </div><br>
-                <div class="form-check">
-                    <input class="form-check-input" type="radio" name="category"
-                        value="With Substantial International Grants/Contracts Research (Above US$ 500,000.00)">
-                    <label class="form-check-label">With Substantial International Grants/Contracts Research (Above US$
-                        500,000.00)</label>
-                </div><br>
-                <div class="form-check">
-                    <input class="form-check-input" type="radio" name="category"
-                        value="Non-Ghanaian Inverstigators with no External Support">
-                    <label class="form-check-label">Non-Ghanaian Inverstigators with no External Support</label>
-                </div><br>
-                <div class="form-check">
-                    <input class="form-check-input" type="radio" name="category"
-                        value="Ghanaian Lecturers/ Professionals (Non KATH Employees without Funding">
-                    <label class="form-check-label">Ghanaian Lecturers/ Professionals (Non KATH Employees without
-                        Funding</label>
-                </div><br>
-                <div class="form-check">
-                    <input class="form-check-input" type="radio" name="category"
-                        value="Ghanaian Lecturers / Professionals (KATH Employees without Funding">
-                    <label class="form-check-label">Ghanaian Lecturers / Professionals (KATH Employees without
-                        Funding</label>
-                </div><br>
-                <div class="form-check">
-                    <input class="form-check-input" type="radio" name="category"
-                        value="Post Graduate Students with International Funding">
-                    <label class="form-check-label">Post Graduate Students with International Funding</label>
-                </div><br>
-                <div class="form-check">
-                    <input class="form-check-input" type="radio" name="category"
-                        value="Post Graduate Students with Local Funding">
-                    <label class="form-check-label">Post Graduate Students with Local Funding</label>
-                </div><br>
-                <div class="form-check">
-                    <input class="form-check-input" type="radio" name="category"
-                        value="Post Graduate Students (Without Funding)">
-                    <label class="form-check-label">Post Graduate Students (Without Funding)</label>
-                </div><br>
-                <div class="form-check">
-                    <input class="form-check-input" type="radio" name="category" value="Undergraduate Students">
-                    <label class="form-check-label">Undergraduate Students</label>
-                </div><br>
-                <div class="form-check">
-                    <input class="form-check-input" type="radio" name="category"
-                        value="Non-Ghanaian Students with no External Support">
-                    <label class="form-check-label">Non-Ghanaian Students with no External Support"</label>
-                </div><br>
-                <div class="form-check">
-                    <input class="form-check-input" type="radio" name="category"
-                        value="Ghanaian Lecturers / Professionals (With Funding less than US$ 5,000.00)">
-                    <label class="form-check-label">Ghanaian Lecturers / Professionals (With Funding less than US$
-                        5,000.00)</label>
-                </div><br>
-                <div class="form-check">
-                    <input class="form-check-input" type="radio" name="category" id="caseReport" value="Case Report">
-                    <label class="form-check-label" for="caseReport">Case Report</label>
-                </div><br>
-                <div class="form-check">
-                    <input class="form-check-input" type="radio" name="category" id="waivedOption" value="Study has been waived">
-                    <label class="form-check-label" for="waivedOption">Study has been waived</label>
-                </div><br>
-
-                <!-- Waived Study reference number (initially hidden) -->
-                <div id="waiverCodeInput" class="mt-2" style="display:none;">
-                    <label for="waiverCode" class="form-label">Enter Waiver Reference Number</label>
-                    <input type="text" name="waiver_code" id="waiverCode" class="form-control"
-                        placeholder="Waiver Reference Number" required>
-                </div><br>
-            </div>
-
-        </div>
-
-        <!-- Step 2 PRINCIPAL INVESTIGATOR INFORMATION-->
-        <div class="form-step">
-            <h4>Step 2: Principal Investigator Info</h4>
-
-            <div class="mb-3">
-                <label for="title" class="form-label">Title</label>
-                <select class="form-select" id="title" name="title">
-                    <option value="Mr.">Mr.</option>
-                    <option value="Mrs.">Mrs.</option>
-                    <option value="Ms.">Ms.</option>
-                    <option value="Dr.">Dr.</option>
-                    <option value="Prof.">Prof.</option>
-                    <option value="Rev.">Rev.</option>
-                    <option value="Sir">Sir</option>
-                    <option value="Miss">Miss</option>
-                </select>
-            </div>
-            <div class="mb-3">
-                <label for="surname" class="form-label">Surname</label>
-                <input type="text" class="form-control" id="surname" name="surname">
-            </div>
-            <div class="mb-3">
-                <label for="firstname" class="form-label">First Name</label>
-                <input type="text" class="form-control" id="firstname" name="firstname">
-            </div>
-            <div class="mb-3">
-                <label for="othernames" class="form-label">Other Name</label>
-                <input type="text" class="form-control" id="othernames" name="othernames">
-            </div>
-
-            <div class="mb-3">
-                <label class="form-label">Nationality</label><br>
-                <div class="form-check">
-                    <input class="form-check-input" type="radio" name="nationality" value="Ghanaian">
-                    <label class="form-check-label">Ghanaian</label>
+    <div class="row">
+        <div class="col-12">
+            <h2 class="text-center mb-4">Research Application</h2>
+            
+            <?php if (isset($application) && !empty($application['ref_code'])): ?>
+            <div class="alert alert-info mb-4">
+                <div class="d-flex align-items-center">
+                    <div>
+                        <i class="bi bi-info-circle-fill me-2"></i>
+                        <strong>Application Reference:</strong> <?= htmlspecialchars($application['ref_code']) ?>
+                    </div>
+                    <button type="button" class="btn btn-sm btn-outline-primary ms-auto" id="copyRefCode">
+                        <i class="bi bi-clipboard me-1"></i> Copy
+                    </button>
                 </div>
-                <div class="form-check">
-                    <input class="form-check-input" type="radio" name="nationality" value="Non-Ghanaian">
-                    <label class="form-check-label">Other</label>
+                <div class="mt-2 small">
+                    Save this reference code to resume your application later.
                 </div>
             </div>
-
-            <div class="mb-3">
-                <label for="localcollabDetails" class="form-label">Local Collaborator Details</label>
-                <input type="text" class="form-control" id="localcollabDetails" name="localcollabDetails">
+            <?php endif; ?>
+            
+            <?php if (isset($_GET['error'])): ?>
+            <div class="alert alert-danger mb-4">
+                <i class="bi bi-exclamation-triangle-fill me-2"></i>
+                <?php if ($_GET['error'] == 'save_failed'): ?>
+                    Failed to save your application. Please try again.
+                <?php else: ?>
+                    An error occurred. Please try again.
+                <?php endif; ?>
             </div>
-
-            <div class="mb-3">
-                <label for="supervisorDetailsforStudentprojects" class="form-label">Supervisor Details for Student
-                    Projects</label>
-                <input type="text" class="form-control" id="supervisorDetailsforStudentprojects"
-                    name="supervisorDetailsforStudentprojects">
-            </div>
-
-            <div class="mb-3">
-                <label for="KNUST" class="form-label">Principal Investigator Institution</label>
-                <div class="form-check">
-                    <input type="checkbox" class="form-check-input" id="KATH" name="KATH" value="KATH">
-                    <label for="KATH" class="form-label">KATH</label>
-                </div>
-
-                <div class="form-check">
-                    <input type="checkbox" class="form-check-input" id="KNUST" name="KNUST" value="KNUST">
-                    <label for="KNUST" class="form-label">KNUST</label>
-                </div>
-
-                <div class="form-check">
-                    <input type="checkbox" class="form-check-input" id="CCTH" name="CCTH" value="CCTH">
-                    <label for="CCTH" class="form-label">CCTH</label>
-                </div>
-
-                <div class="form-check">
-                    <input type="checkbox" class="form-check-input" id="CCTH" name="CCTH" value="CCTH">
-                    <label for="CCTH" class="form-label">CCTH</label>
-                </div>
-
-                <div class="form-check">
-                    <input type="checkbox" class="form-check-input" id="KBTH" name="KBTH" value="KBTH">
-                    <label for="KBTH" class="form-label">KBTH</label>
-                </div>
-
-                <div class="form-check">
-                    <input type="checkbox" class="form-check-input" id="TTH" name="TTH" value="TTH">
-                    <label for="TTH" class="form-label">TTH</label>
-                </div>
-
-                <div class="form-check">
-                    <input type="checkbox" class="form-check-input" id="other" name="other" value="other">
-                    <label for="other" class="form-label">Other</label>
-                </div>
-            </div>
-
-                <div class="mb-3">
-                    <label for="directorate" class="form-label">Directorate/ Unit of Principal Investigator if
-                        KATH</label>
-                    <select id="directorate" name="directorate" class="form-select">
-                        <option value="">-- Select Directorate --</option>
-                        <option value="Quality Assurance">Quality Assurance</option>
-                        <option value="Planning, Monitoring & Evaluation">Planning, Monitoring & Evaluation</option>
-                        <option value="Public Affairs">Public Affairs</option>
-                        <option value="Internal Audit">Internal Audit</option>
-                        <option value="Human Resource Management">Human Resource Management</option>
-                        <option value="Biostatics">Biostatics</option>
-                        <option value="Supply Chain Management">Supply Chain Management</option>
-                        <option value="Security">Security</option>
-                        <option value="General Administration">General Administration</option>
-                        <option value="Transfusion Medicine">Transfusion Medicine</option>
-                        <option value="Public Health">Public Health</option>
-                        <option value="Psychiatry">Psychiatry</option>
-                        <option value="Research and Development">Research and Development</option>
-                        <option value="Health Insurance">Health Insurance</option>
-                        <option value="ICT">ICT</option>
-                        <option value="Social Welfare">Social Welfare</option>
-                        <option value="Chaplaincy">Chaplaincy</option>
-                        <option value="Electric Medical Records System">Electric Medical Records System</option>
-                        <option value="Project Management">Project Management</option>
-                        <option value="Corporate and Special Services">Corporate and Special Services</option>
-                        <option value="Obstetrics and Gynaecology">Obstetrics and Gynaecology</option>
-                        <option value="Surgery">Surgery</option>
-                        <option value="Child Health">Child Health</option>
-                        <option value="Family Medicine">Family Medicine</option>
-                        <option value="Anaesthesia and ICU">Anaesthesia and ICU</option>
-                        <option value="EENT">Eye, Ear, Nose and Throat (EENT)</option>
-                        <option value="Medicine">Medicine</option>
-                        <option value="Radiology">Radiology</option>
-                        <option value="Oncology">Oncology</option>
-                        <option value="Trauma & Orthopaedics">Trauma & Orthopaedics</option>
-                        <option value="Emergency Medicine">Emergency Medicine</option>
-                        <option value="Oral Health">Oral Health</option>
-                        <option value="Laboratory Services">Laboratory Services</option>
-                        <option value="General Services">General Services</option>
-                        <option value="Domestic Services">Domestic Services</option>
-                    </select>
-                </div>
-
-                <div class="mb-3">
-                    <label for="college" class="form-label">College/Department of PI if KNUST</label>
-                    <select id="college" name="college" class="form-select">
-                        <option value="">-- Select College --</option>
-                        <option value="College of Health Sciences">College of Health Sciences</option>
-                        <option value="College of Science">College of Science</option>
-                        <option value="College of Engineering">College of Engineering</option>
-                        <option value="College of Humanities and Social Sciences">College of Humanities and Social
-                            Sciences</option>
-                        <option value="College of Agriculture and Natural Resources">College of Agriculture and Natural
-                            Resources</option>
-                    </select>
-                </div>
-
-                <div class="mb-3">
-                    <label for="institutioDepartment" class="form-label">Directorate/Department/Unit if PI's instution
-                        is Other specify</label>
-                    <input type="text" class="form-control" id="institutioDepartment" name="institutioDepartment">
-                </div>
-
-            </div>
-
-        </div>
-
-        <!-- Step 3 TRAINING AND CERTIFICATION-->
-        <div class="form-step">
-            <h4>Step 3: Research Training</h4>
-
-            <!-- GCP Training -->
-            <div class="mb-3">
-                <label class="form-label">Have you had Good Clinical Practice (GCP) training in the past three (3) years?</label>
-                <div>
-                    <input type="radio" id="gcp_yes" name="gcp_training" value="Yes" onchange="toggleGCPDetails()"> Yes
-                    <input type="radio" id="gcp_no" name="gcp_training" value="No" onchange="toggleGCPDetails()"> No
-                    <input type="radio" id="gcp_na" name="gcp_training" value="N/A" onchange="toggleGCPDetails()"> N/A
-                </div>
-            </div>
-
-            <div class="mb-3" id="gcp_details" style="display:none;">
-                <label class="form-label">
-                    If yes, state the name of place and dates of training; attach evidence of completion certificate.
-                    <em>NB: GCP training for PI is mandatory for all proposals to conduct clinical trials</em>
-                </label>
-                <textarea class="form-control" name="gcp_details" rows="3"></textarea>
-                <input type="file" name="gcp_certificate" class="form-control mt-2">
-            </div>
-
-            <!-- Research Ethics Training -->
-            <div class="mb-3">
-                <label class="form-label">Have you attended any research ethics training in the past three years?</label>
-                <div>
-                    <input type="radio" id="ethics_yes" name="ethics_training" value="Yes" onchange="toggleEthicsDetails()"> Yes
-                    <input type="radio" id="ethics_no" name="ethics_training" value="No" onchange="toggleEthicsDetails()"> No
-                </div>
-            </div>
-
-            <div class="mb-3" id="ethics_details" style="display:none;">
-                <label class="form-label">
-                    If yes, state the name of place and dates of training; attach evidence of completion certificate.
-                </label>
-                <textarea class="form-control" name="ethics_details" rows="3"></textarea>
-                <input type="file" name="ethics_certificate" class="form-control mt-2">
-            </div>
-
-            <!-- GLP Training -->
-            <div class="mb-3">
-                <label class="form-label">Have you had Good Laboratory Practice (GLP) training in the past three (3) years?</label>
-                <div>
-                    <input type="radio" name="glp_training" value="Yes"> Yes
-                    <input type="radio" name="glp_training" value="No"> No
-                </div>
+            <?php endif; ?>
+            
+            <!-- Progress Bar -->
+            <?php renderProgressBar($form_steps, $current_step, $application); ?>
+            
+            <!-- Application Form -->
+            <form id="applicationForm" action="form_steps/form_handler.php" method="POST" enctype="multipart/form-data" class="needs-validation" novalidate>
+                <!-- Hidden field for current step -->
+                <input type="hidden" name="current_step" value="<?= $current_step ?>">
+                <?php if ($specific_app_id): ?>
+                <input type="hidden" name="app_id" value="<?= $specific_app_id ?>">
+                <?php endif; ?>>
+                
+                <?php include 'form_steps/' . $form_steps[$current_step]['file']; ?>
+                
+                <!-- Navigation Buttons -->
+                <?php renderFormNavigation($current_step, count($form_steps)); ?>
+            </form>
+            
+            <!-- Save Confirmation Alert -->
+            <div class="alert alert-success alert-dismissible fade show" id="saveAlert" role="alert">
+                <i class="bi bi-check-circle-fill me-2"></i>
+                <span id="saveAlertMessage">Progress saved successfully!</span>
+                <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
             </div>
         </div>
-
-
-        <!-- Step 4 -->
-        <div class="form-step">
-            <h4>Step 4: Study Site</h4>
-
-            <div class="mb-3">
-                    <label for="study_site" class="form-label">Where do you intend to conduct the study?</label>
-                    <select id="study_site" name="study_site" class="form-select">
-                        <option value="">-- Select Directorate --</option>
-                        <option value="Quality Assurance">Quality Assurance</option>
-                        <option value="Planning, Monitoring & Evaluation">Planning, Monitoring & Evaluation</option>
-                        <option value="Public Affairs">Public Affairs</option>
-                        <option value="Internal Audit">Internal Audit</option>
-                        <option value="Human Resource Management">Human Resource Management</option>
-                        <option value="Biostatics">Biostatics</option>
-                        <option value="Supply Chain Management">Supply Chain Management</option>
-                        <option value="Security">Security</option>
-                        <option value="General Administration">General Administration</option>
-                        <option value="Transfusion Medicine">Transfusion Medicine</option>
-                        <option value="Public Health">Public Health</option>
-                        <option value="Psychiatry">Psychiatry</option>
-                        <option value="Research and Development">Research and Development</option>
-                        <option value="Health Insurance">Health Insurance</option>
-                        <option value="ICT">ICT</option>
-                        <option value="Social Welfare">Social Welfare</option>
-                        <option value="Chaplaincy">Chaplaincy</option>
-                        <option value="Electric Medical Records System">Electric Medical Records System</option>
-                        <option value="Project Management">Project Management</option>
-                        <option value="Corporate and Special Services">Corporate and Special Services</option>
-                        <option value="Obstetrics and Gynaecology">Obstetrics and Gynaecology</option>
-                        <option value="Surgery">Surgery</option>
-                        <option value="Child Health">Child Health</option>
-                        <option value="Family Medicine">Family Medicine</option>
-                        <option value="Anaesthesia and ICU">Anaesthesia and ICU</option>
-                        <option value="EENT">Eye, Ear, Nose and Throat (EENT)</option>
-                        <option value="Medicine">Medicine</option>
-                        <option value="Radiology">Radiology</option>
-                        <option value="Oncology">Oncology</option>
-                        <option value="Trauma & Orthopaedics">Trauma & Orthopaedics</option>
-                        <option value="Emergency Medicine">Emergency Medicine</option>
-                        <option value="Oral Health">Oral Health</option>
-                        <option value="Laboratory Services">Laboratory Services</option>
-                        <option value="General Services">General Services</option>
-                        <option value="Domestic Services">Domestic Services</option>
-                    </select>
-                </div>
-
-            <div class="mb-3">
-                <label for="staffCategory" class="form-label">What category of staff will be involved in  your study?<br>Check all that applies.</label>
-                <div class="form-check">
-                    <input type="checkbox" class="form-check-input" id="Nurses" name="Nurses" value="Nurses">
-                    <label for="Nurses" class="form-label">Nurses</label>
-                </div>
-
-                <div class="form-check">
-                    <input type="checkbox" class="form-check-input" id="Doctors" name="Doctors" value="Doctors">
-                    <label for="Doctors" class="form-label">Doctors</label>
-                </div>
-
-                <div class="form-check">
-                    <input type="checkbox" class="form-check-input" id="Not Applicable" name="Not Applicable" value="Not Applicable">
-                    <label for="Not Applicable" class="form-label">Not Applicable</label>
-                </div>
-
-                <div class="form-check">
-                    <input type="checkbox" class="form-check-input" id="other" name="other" value="other">
-                    <label for="other" class="form-label">Other</label>
-                </div>
-            </div>
-
-            <div class="mb-3">
-                <label for="researchEquipments" class="form-label">Based on your research proposal, which equipment will you use, List all </label>
-                <input type="text" class="form-control" id="researchEquipments" name="researchEquipments">
-            </div>
-
-            <div class="mb-3">
-                <label for="support" class="form-label">What physical or financial support do you anticipate to provide KATH during and after your study.</label>
-                <input type="text" class="form-control" id="support" name="support">
-            </div>
-        </div>
-
-        <!-- Step 5 -->
-        <div class="form-step">
-            <h4>Step 5: Study Design & Methodology</h4>
-
-            <div class="mb-3">
-                <label for="studyBackground" class="form-label">Study Background (include relevant African and / or Ghanaian Literature with references)</label>
-                <textarea name="studyBackground" id="studyBackground" cols="30" rows="10" class="form-control"></textarea>
-            </div>
-
-            <div class="mb-3">
-                <label for="studyAimandObjectives" class="form-label">Study Aim and Objectives</label>
-                <textarea name="studyAimandObjectives" id="studyAimandObjectives" cols="30" rows="10" class="form-control"></textarea>
-            </div>
-
-            <div class="mb-3">
-                <label for="conceptualFramework" class="form-label">Study Hypothesis or Conceptual framework</label>
-                <textarea name="conceptualFramework" id="conceptualFramework" cols="30" rows="10" class="form-control"></textarea>
-            </div>
-
-            <div class="mb-3">
-                <label for="sampleSize" class="form-label">Sample Size</label>
-                <input type="number" class="form-control" id="sampleSize" name="sampleSize" required>
-            </div>
-
-            <div class="mb-3">
-                <label for="researchTitle" class="form-label">Research Title</label>
-                <input type="text" class="form-control" id="researchTitle" name="researchTitle" required>
-            </div>
-        
-            <div class="mb-3">
-                <label for="keywords" class="form-label">Keywords (comma-separated)</label>
-                <input type="text" class="form-control" id="keywords" name="keywords">
-            </div>
-
-            <div class="mb-3">
-                <label for="submissionDate" class="form-label">Expected Submission Date</label>
-                <input type="date" class="form-control" id="submissionDate" name="submissionDate">
-            </div>
-        </div>
-
-        <!-- Step 8 -->
-        <div class="form-step">
-            <h4>Step 3: Research Details</h4>
-
-            <div class="mb-3">
-                <label for="researchTitle" class="form-label">Research Title</label>
-                <input type="text" class="form-control" id="researchTitle" name="researchTitle" required>
-            </div>
-        
-            <div class="mb-3">
-                <label for="keywords" class="form-label">Keywords (comma-separated)</label>
-                <input type="text" class="form-control" id="keywords" name="keywords">
-            </div>
-
-            <div class="mb-3">
-                <label for="submissionDate" class="form-label">Expected Submission Date</label>
-                <input type="date" class="form-control" id="submissionDate" name="submissionDate">
-            </div>
-        </div>
-
-        <!-- Step 9 -->
-        <div class="form-step">
-            <h4>Step 4: Upload Supporting Documents</h4>
-
-            <div class="mb-3">
-                <label for="proposalFile" class="form-label">Proposal Document</label>
-                <input type="file" class="form-control" id="proposalFile" name="proposalFile"
-                    accept=".pdf,.docx,.jpg,.jpeg,.png" required>
-                <small class="text-muted">Accepted formats: PDF</small>
-            </div>
-            <div class="mb-3">
-                <label for="proposalFile" class="form-label">Consent Form</label>
-                <input type="file" class="form-control" id="proposalFile" name="proposalFile"
-                    accept=".pdf,.docx,.jpg,.jpeg,.png" required>
-                <small class="text-muted">Accepted formats: PDF</small>
-            </div>
-            <div class="mb-3">
-                <label for="proposalFile" class="form-label">MTA (if applicable)</label>
-                <input type="file" class="form-control" id="proposalFile" name="proposalFile"
-                    accept=".pdf,.docx,.jpg,.jpeg,.png" required>
-                <small class="text-muted">Accepted formats: PDF, DOCX, JPG, PNG</small>
-            </div>
-            <div class="mb-3">
-                <label for="proposalFile" class="form-label">CTA (if applicable)</label>
-                <input type="file" class="form-control" id="proposalFile" name="proposalFile"
-                    accept=".pdf,.docx,.jpg,.jpeg,.png" required>
-                <small class="text-muted">Accepted formats: PDF, DOCX, JPG, PNG</small>
-            </div>
-            <div class="mb-3">
-                <label for="proposalFile" class="form-label">DTA (if applicable)</label>
-                <input type="file" class="form-control" id="proposalFile" name="proposalFile"
-                    accept=".pdf,.docx,.jpg,.jpeg,.png" required>
-                <small class="text-muted">Accepted formats: PDF, DOCX, JPG, PNG</small>
-            </div>
-            <div class="mb-3">
-                <label for="proposalFile" class="form-label">FDA (if applicable)</label>
-                <input type="file" class="form-control" id="proposalFile" name="proposalFile"
-                    accept=".pdf,.docx,.jpg,.jpeg,.png" required>
-                <small class="text-muted">Accepted formats: PDF, DOCX, JPG, PNG</small>
-            </div>
-            <div class="mb-3">
-                <label for="proposalFile" class="form-label">Good Clinical Practice[GCP] Certificate (if applicable)</label>
-                <input type="file" class="form-control" id="proposalFile" name="proposalFile"
-                    accept=".pdf,.docx,.jpg,.jpeg,.png" required>
-                <small class="text-muted">Accepted formats: PDF, DOCX, JPG, PNG</small>
-            </div>
-            <div class="mb-3">
-                <label for="proposalFile" class="form-label">Good Laboratory Practice[GLP] Certificate (if applicable) </label>
-                <input type="file" class="form-control" id="proposalFile" name="proposalFile"
-                    accept=".pdf,.docx,.jpg,.jpeg,.png" required>
-                <small class="text-muted">Accepted formats: PDF, DOCX, JPG, PNG</small>
-            </div>
-            <div class="mb-3">
-                <label for="proposalFile" class="form-label">Ethics Training Certificate (if applicable)</label>
-                <input type="file" class="form-control" id="proposalFile" name="proposalFile"
-                    accept=".pdf,.docx,.jpg,.jpeg,.png" required>
-                <small class="text-muted">Accepted formats: PDF, DOCX, JPG, PNG</small>
-            </div>
-
-            <div class="mb-3">
-                <label for="ethicsFile" class="form-label">Any Other Document Relevant for the Conduct of the Study (optional)</label>
-                <input type="file" class="form-control" id="ethicsFile" name="ethicsFile"
-                    accept=".pdf,.docx,.jpg,.jpeg,.png">
-            </div>
-        </div>
-
-        <!-- Step 10 -->
-        <div class="form-step">
-            <h4>Step 5: Review Your Application</h4>
-
-            <div class="border p-3 mb-3 bg-light">
-                <p><strong>Purpose:</strong> <span id="reviewPurpose"></span></p>
-                <p><strong>Category:</strong> <span id="reviewCategory"></span></p>
-                <p><strong>Reference Number:</strong> <span id="reviewRefNumber"></span></p>
-                <p><strong>Principal Investigator:</strong> <span id="reviewInvestigator"></span></p>
-                <p><strong>Nationality:</strong> <span id="reviewNationality"></span></p>
-                <p><strong>Research Title:</strong> <span id="reviewResearchTitle"></span></p>
-                <p><strong>Keywords:</strong> <span id="reviewKeywords"></span></p>
-                <p><strong>Expected Submission Date:</strong> <span id="reviewSubmissionDate"></span></p>
-                <p><strong>Proposal File:</strong> Will be uploaded</p>
-                <p><strong>Ethics Clearance:</strong> Optional</p>
-            </div>
-
-
-            <div class="form-check">
-                <input type="checkbox" class="form-check-input" id="confirmReview" required>
-                <label class="form-check-label" for="confirmReview">I confirm that all information provided is accurate and complete to the best of my knowledge.</label>
-            </div>
-
-            <div class="form-check">
-                <input type="checkbox" class="form-check-input" id="confirmEthics" required>
-                <label class="form-check-label" for="confirmEthics">Please note that making any false statement (s) for
-                the purposes of securing R&D approval and conducting studies in KATH
-                is prohibited. KATH reserves the right to suspend or stop your study
-                if later it is found you have falsified information.</label>
-            </div>
-
-        </div>
-
-        <!-- Navigation Buttons -->
-        <div class="d-flex justify-content-between mt-4">
-            <button type="button" class="btn btn-secondary" id="prevBtn" style="display:none;">Previous</button>
-            <!-- <button type="button" id="saveDraftBtn" class="btn btn-secondary">Save & Resume Later</button> -->
-            <button type="button" class="btn btn-primary" id="nextBtn">Next</button>
-            <button type="submit" class="btn btn-success" style="display:none;">Submit</button>
-        </div>
-
-    </form>
+    </div>
 </div>
 
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
 <script>
-    // Show or hide waiver code input based on category selection When the DOM is ready
-    document.addEventListener("DOMContentLoaded", function() {
-        const waiverOption = document.getElementById("waivedOption");
-        const waiverCodeInput = document.getElementById("waiverCodeInput");
-        const allCategoryRadios = document.querySelectorAll('input[name="category"]');
-
-        function toggleWaiverCode() {
-            waiverCodeInput.style.display = waiverOption.checked ? "block" : "none";
-        }
-
-        allCategoryRadios.forEach(radio => {
-            radio.addEventListener("change", toggleWaiverCode);
+document.addEventListener('DOMContentLoaded', function() {
+    const form = document.getElementById('applicationForm');
+    const saveButton = document.getElementById('save-progress');
+    const saveAlert = document.getElementById('saveAlert');
+    const saveAlertMessage = document.getElementById('saveAlertMessage');
+    const currentStep = <?= $current_step ?>;
+    
+    // Copy reference code button
+    const copyRefBtn = document.getElementById('copyRefCode');
+    if (copyRefBtn) {
+        copyRefBtn.addEventListener('click', function() {
+            const refCode = '<?= $application['ref_code'] ?? '' ?>';
+            navigator.clipboard.writeText(refCode).then(function() {
+                copyRefBtn.innerHTML = '<i class="bi bi-check me-1"></i> Copied!';
+                setTimeout(() => {
+                    copyRefBtn.innerHTML = '<i class="bi bi-clipboard me-1"></i> Copy';
+                }, 2000);
+            });
         });
-
-        // Initial check (in case form is reloaded with selection)
-        toggleWaiverCode();
-    });
-
-    function validateForm() {
-        const waivedSelected = document.getElementById("waivedOption").checked;
-        const waiverCode = document.getElementById("waiverCode").value.trim();
-
-        if (waivedSelected && waiverCode === "") {
-            alert("Please enter a waiver code since 'Study has been waived' is selected.");
-            document.getElementById("waiverCode").focus();
-            return false;
-        }
-
-        return true;
     }
-
-    // Payment integration placeholder
-    document.querySelectorAll('.category-option').forEach(option => {
-        option.addEventListener('change', function() {
-            const purpose = document.querySelector('select[name="purpose"]').value;
-            const category = this.value;
-            const waiverCode = document.querySelector('input[name="waiver_code"]').value;
-
-            if (!category) return;
-
-            // Save Step 1 data to sessionStorage
-            sessionStorage.setItem('purpose', purpose);
-            sessionStorage.setItem('category', category);
-            sessionStorage.setItem('waiver_code', waiverCode);
-
-            // Redirect to payment portal
-            window.location.href = 'payment.php';
-        });
-    });
-
-    // Load saved data from sessionStorage after payment
-    document.addEventListener("DOMContentLoaded", () => {
-        if (sessionStorage.getItem('paid')) {
-            document.querySelector('select[name="purpose"]').value = sessionStorage.getItem('purpose');
-            document.querySelector(`input[name="category"][value="${sessionStorage.getItem('category')}"]`).checked = true;
-            document.querySelector('input[name="waiver_code"]').value = sessionStorage.getItem('waiver_code');
-
-            // Show Step 2
-            document.getElementById('step1').classList.remove('active');
-            document.getElementById('step2').classList.add('active');
-
-            // Optionally disable Step 1
-            document.getElementById('step1').style.display = 'none';
-
-            // Clear payment flag
-            sessionStorage.removeItem('paid');
-        }
-    });
-
-    // Multi-step form functionality
-    const steps = document.querySelectorAll(".form-step");
-    let currentStep = 0;
-
-    const prevBtn = document.getElementById("prevBtn");
-    const nextBtn = document.getElementById("nextBtn");
-    const submitBtn = document.querySelector("button[type='submit']");
-
-    function showStep(index) {
-        steps.forEach((step, i) => {
-            step.classList.toggle("active", i === index);
-        });
-        prevBtn.style.display = index > 0 ? "inline-block" : "none";
-        nextBtn.style.display = index < steps.length - 1 ? "inline-block" : "none";
-        submitBtn.style.display = index === steps.length - 1 ? "inline-block" : "none";
-    }
-
-    prevBtn.onclick = () => {
-        if (currentStep > 0) currentStep--;
-        showStep(currentStep);
-    };
-
-    nextBtn.onclick = () => {
-        if (currentStep < steps.length - 1) currentStep++;
-        showStep(currentStep);
-    };
-
-    showStep(currentStep);
-</script>
-<script>
-    const nextBtns = document.querySelectorAll('.btn-next');
-    nextBtns.forEach(btn => {
-        btn.addEventListener('click', () => {
-            // Populate review fields before last step
-            if (document.querySelectorAll('.form-step')[formStep].contains(document.getElementById(
-                    'reviewPurpose'))) {
-                document.getElementById('reviewPurpose').textContent = document.getElementById('purpose')
-                    .value;
-                document.getElementById('reviewCategory').textContent = document.getElementById('category')
-                    .value;
-                document.getElementById('reviewRefNumber').textContent = document.getElementById(
-                    'refNumber').value;
-                document.getElementById('reviewInvestigator').textContent = document.getElementById(
-                    'investigatorName').value;
-                document.getElementById('reviewNationality').textContent = document.getElementById(
-                    'nationality').value;
-                document.getElementById('reviewResearchTitle').textContent = document.getElementById(
-                    'researchTitle').value;
-                document.getElementById('reviewKeywords').textContent = document.getElementById('keywords')
-                    .value;
-                document.getElementById('reviewSubmissionDate').textContent = document.getElementById(
-                    'submissionDate').value;
-            }
-        });
-    });
-</script>
-<script>
-    document.getElementById('saveDraftBtn').addEventListener('click', function() {
-        const formData = new FormData(document.getElementById('multiStepForm'));
-        fetch('save_progress.php', {
+    
+    // Save progress functionality
+    if (saveButton) {
+        saveButton.addEventListener('click', function(e) {
+            e.preventDefault();
+            
+            // Collect form data
+            const formData = new FormData(form);
+            formData.append('action', 'save_progress');
+            formData.append('step', currentStep);
+            
+            // Show loading indicator
+            const originalBtnText = saveButton.innerHTML;
+            saveButton.innerHTML = '<span class="spinner-border spinner-border-sm me-2" role="status" aria-hidden="true"></span>Saving...';
+            saveButton.disabled = true;
+            
+            // Save via AJAX
+            fetch('form_steps/form_handler.php', {
                 method: 'POST',
                 body: formData
             })
-            .then(res => res.json())
+            .then(response => response.json())
             .then(data => {
-                alert("Progress saved! Use this code to resume: " + data.ref_code);
-                document.getElementById('refCodeInput').value = data.ref_code;
+                // Restore button state
+                saveButton.innerHTML = originalBtnText;
+                saveButton.disabled = false;
+                
+                if (data.success) {
+                    // Show success message
+                    saveAlertMessage.textContent = data.message;
+                    saveAlert.style.display = 'block';
+                    
+                    // Hide after 3 seconds
+                    setTimeout(() => {
+                        saveAlert.style.display = 'none';
+                    }, 3000);
+                    
+                    // If there's a reference code, update the page to show it without reloading
+                    if (data.ref_code && !document.querySelector('.alert-info')) {
+                        const refCodeAlert = document.createElement('div');
+                        refCodeAlert.className = 'alert alert-info mb-4';
+                        refCodeAlert.innerHTML = `
+                            <div class="d-flex align-items-center">
+                                <div>
+                                    <i class="bi bi-info-circle-fill me-2"></i>
+                                    <strong>Application Reference:</strong> ${data.ref_code}
+                                </div>
+                                <button type="button" class="btn btn-sm btn-outline-primary ms-auto" id="copyRefCode">
+                                    <i class="bi bi-clipboard me-1"></i> Copy
+                                </button>
+                            </div>
+                            <div class="mt-2 small">
+                                Save this reference code to resume your application later.
+                            </div>
+                        `;
+                        
+                        form.parentNode.insertBefore(refCodeAlert, form);
+                        
+                        // Add event listener to the new copy button
+                        document.getElementById('copyRefCode').addEventListener('click', function() {
+                            navigator.clipboard.writeText(data.ref_code);
+                            this.innerHTML = '<i class="bi bi-check me-1"></i> Copied!';
+                            setTimeout(() => {
+                                this.innerHTML = '<i class="bi bi-clipboard me-1"></i> Copy';
+                            }, 2000);
+                        });
+                    }
+                } else {
+                    // Show error message
+                    saveAlertMessage.textContent = data.message || 'Failed to save progress';
+                    saveAlert.className = saveAlert.className.replace('alert-success', 'alert-danger');
+                    saveAlert.style.display = 'block';
+                    
+                    // Hide after 3 seconds
+                    setTimeout(() => {
+                        saveAlert.style.display = 'none';
+                        saveAlert.className = saveAlert.className.replace('alert-danger', 'alert-success');
+                    }, 3000);
+                }
+            })
+            .catch(error => {
+                // Restore button state
+                saveButton.innerHTML = originalBtnText;
+                saveButton.disabled = false;
+                
+                console.error('Error:', error);
+                saveAlertMessage.textContent = 'An error occurred while saving';
+                saveAlert.className = saveAlert.className.replace('alert-success', 'alert-danger');
+                saveAlert.style.display = 'block';
+                
+                // Hide after 3 seconds
+                setTimeout(() => {
+                    saveAlert.style.display = 'none';
+                    saveAlert.className = saveAlert.className.replace('alert-danger', 'alert-success');
+                }, 3000);
             });
-    });
-
-    // waived study toggle
-    function toggleWaivedStudy() {
-        const waivedStudy = document.getElementByName("category").value;
-        const contentWrapper = document.getElementById("waivedStudyContentWrapper");
-
-        if (waivedStudy === "Study has been waived") {
-            contentWrapper.style.display = "block";
-        } else {
-            contentWrapper.style.display = "none";
+        });
+    }
+    
+    // Form navigation
+    const prevButton = document.querySelector('.prev-step');
+    const nextButton = document.querySelector('.next-step');
+    
+    if (prevButton) {
+        prevButton.addEventListener('click', function() {
+            <?php if ($specific_app_id): ?>
+            window.location.href = `<?= $_SERVER['PHP_SELF'] ?>?step=${currentStep - 1}&app_id=<?= $specific_app_id ?>`;
+            <?php else: ?>
+            window.location.href = `<?= $_SERVER['PHP_SELF'] ?>?step=${currentStep - 1}`;
+            <?php endif; ?>
+        });
+    }
+    
+    if (nextButton) {
+        nextButton.addEventListener('click', function(event) {
+            // Only validate form when moving to next step
+            if (!form.checkValidity()) {
+                event.preventDefault();
+                event.stopPropagation();
+                form.classList.add('was-validated');
+                
+                // Scroll to the first invalid element
+                const firstInvalid = form.querySelector(':invalid');
+                if (firstInvalid) {
+                    firstInvalid.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                }
+                
+                return;
+            }
+            
+            // Save current step data before navigating to next step
+            const formData = new FormData(form);
+            formData.append('action', 'save_progress');
+            formData.append('step', currentStep);
+            
+            // Show loading indicator
+            const originalBtnText = nextButton.innerHTML;
+            nextButton.innerHTML = '<span class="spinner-border spinner-border-sm me-2" role="status" aria-hidden="true"></span>Saving...';
+            nextButton.disabled = true;
+            
+            fetch('form_steps/form_handler.php', {
+                method: 'POST',
+                body: formData
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    // Navigate to next step
+                    <?php if ($specific_app_id): ?>
+                    window.location.href = `<?= $_SERVER['PHP_SELF'] ?>?step=${currentStep + 1}&app_id=<?= $specific_app_id ?>`;
+                    <?php else: ?>
+                    // If we have an app_id now, use it in the next URL
+                    if (data.app_id) {
+                        window.location.href = `<?= $_SERVER['PHP_SELF'] ?>?step=${currentStep + 1}&app_id=${data.app_id}`;
+                    } else {
+                        window.location.href = `<?= $_SERVER['PHP_SELF'] ?>?step=${currentStep + 1}`;
+                    }
+                    <?php endif; ?>
+                } else {
+                    // Restore button text and enable it
+                    nextButton.innerHTML = originalBtnText;
+                    nextButton.disabled = false;
+                    
+                    // Show error message
+                    saveAlertMessage.textContent = data.message || 'Failed to save progress';
+                    saveAlert.className = saveAlert.className.replace('alert-success', 'alert-danger');
+                    saveAlert.style.display = 'block';
+                    
+                    // Hide after 3 seconds
+                    setTimeout(() => {
+                        saveAlert.style.display = 'none';
+                        saveAlert.className = saveAlert.className.replace('alert-danger', 'alert-success');
+                    }, 3000);
+                }
+            })
+            .catch(error => {
+                console.error('Error:', error);
+                
+                // Restore button text and enable it
+                nextButton.innerHTML = originalBtnText;
+                nextButton.disabled = false;
+                
+                saveAlertMessage.textContent = 'An error occurred while saving';
+                saveAlert.className = saveAlert.className.replace('alert-success', 'alert-danger');
+                saveAlert.style.display = 'block';
+                
+                // Hide after 3 seconds
+                setTimeout(() => {
+                    saveAlert.style.display = 'none';
+                    saveAlert.className = saveAlert.className.replace('alert-danger', 'alert-success');
+                }, 3000);
+            });
+        });
+    }
+    
+    // Form validation
+    form.addEventListener('submit', function(event) {
+        if (!form.checkValidity()) {
+            event.preventDefault();
+            event.stopPropagation();
+            
+            // Scroll to the first invalid element
+            const firstInvalid = form.querySelector(':invalid');
+            if (firstInvalid) {
+                firstInvalid.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            }
         }
-    }
-
-    // Toggle GCP and Ethics details based on radio button selection
-    function toggleGCPDetails() {
-        const gcpYes = document.getElementById('gcp_yes').checked;
-        document.getElementById('gcp_details').style.display = gcpYes ? 'block' : 'none';
-    }
-
-    function toggleEthicsDetails() {
-        const ethicsYes = document.getElementById('ethics_yes').checked;
-        document.getElementById('ethics_details').style.display = ethicsYes ? 'block' : 'none';
-    }
+        
+        form.classList.add('was-validated');
+    });
+});
 </script>
-
 
 <?php include 'includes/footer.php'; ?>

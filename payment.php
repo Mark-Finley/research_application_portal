@@ -18,7 +18,7 @@ if (!$user || empty($user['email'])) {
 
 $amount = 20000; // in kobo
 $reference = uniqid('txn_');
-$callback_url = "https://curvy-cases-go.loca.lt/actions/payment_callback.php";
+$callback_url = "https://loud-swans-search.loca.lt/actions/payment_callback.php";
 
 $metadata = [
   "user_id" => $user["id"],

@@ -48,7 +48,7 @@ if ($result['status'] && isset($result['data']['status']) && $result['data']['st
         $stmt = $pdo->prepare("UPDATE users SET has_paid = 1 WHERE id = ?");
         $stmt->execute([$user_id]);
 
-        header("Location: ../apply.php");
+        header("Location: ../application.php");
         exit;
     } else {
         die("User ID missing from metadata.");
